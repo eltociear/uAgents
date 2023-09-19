@@ -28,7 +28,10 @@ class WalletMessagingClient:
         delegate_pubkey = identity.pub_key
         delegate_pubkey_b64 = base64.b64encode(bytes.fromhex(delegate_pubkey)).decode()
         public_key = base64.b64decode(wallet.public_key().public_key).hex()
-        signed_bytes, signature = identity.sign_arbitrary(public_key.encode())
+        if chain_id == '97': 
+            signed_bytes, signature = identity.sign_evm(public_key.encode())
+        else:
+            signed_bytes, signature = identity.sign_arbitrary(public_key.encode())
         self._client = Client(  # pylint: disable=E1121
             identity.address,
             delegate_pubkey_b64,

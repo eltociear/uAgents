@@ -10,7 +10,10 @@ import ecdsa
 from ecdsa.util import sigencode_string_canonize
 
 from uagents.config import USER_PREFIX
-
+from eth_utils import to_checksum_address
+from eth_account import Account
+from eth_account.messages import encode_defunct
+from web3 import Web3
 
 def _decode_bech32(value: str) -> Tuple[str, bytes]:
     prefix, data_base5 = bech32.bech32_decode(value)
@@ -76,6 +79,7 @@ class Identity:
         pub_key_bytes = self._sk.get_verifying_key().to_string(encoding="compressed")
         self._address = _encode_bech32("agent", pub_key_bytes)
         self._pub_key = pub_key_bytes.hex()
+        self.account = Account.from_key(self.private_key)
 
     @staticmethod
     def from_seed(seed: str, index: int) -> "Identity":
@@ -110,11 +114,60 @@ class Identity:
         return self._address
 
     @property
+    def evm_address(self) -> str:
+        eth_checksum_address = to_checksum_address(self.account.address)
+        return eth_checksum_address
+
+    @property
     def pub_key(self) -> str:
         return self._pub_key
 
     def sign(self, data: bytes) -> str:
         return _encode_bech32("sig", self._sk.sign(data))
+
+    def sign_evm(self, data: bytes) -> Tuple[str, str] :
+        encoded = base64.b64encode(data).decode()
+        sign_doc = {
+            "chain_id": "",
+            "account_number": "0",
+            "sequence": "0",
+            "fee": {
+                "gas": "0",
+                "amount": [],
+            },
+            "msgs": [
+                {
+                    "type": "sign/MsgSignData",
+                    "value": {
+                        "signer": self.address,
+                        "data": encoded,
+                    },
+                },
+            ],
+            "memo": "",
+        }
+        sign_doc_json = json.dumps(sign_doc, sort_keys=True, separators=(",", ":"))
+        sign_doc_encoded = encode_defunct(text=(sign_doc_json))
+        signature = self.account.sign_message(sign_doc_encoded)
+        encodedSig = base64.b64encode(signature.signature).decode()
+        enc_sign_doc = base64.b64encode(sign_doc_json.encode()).decode()
+        return enc_sign_doc, encodedSig
+
+    def sign_and_broadcast_transaction(self, recipient_address: str, value_ether: float, web3_provider_url: str):
+        web3 = Web3(Web3.HTTPProvider(web3_provider_url))
+        value_wei = web3.to_wei(value_ether, 'ether')
+        nonce = web3.eth.get_transaction_count(self.evm_address)
+        transaction = {
+            'to': recipient_address,
+            'value': value_wei,
+            'gas': 21000, 
+            'gasPrice': web3.eth.gas_price,
+            'nonce': nonce,
+        }
+
+        signed_transaction = self.account.sign_transaction(transaction)
+        transaction_hash = web3.eth.send_raw_transaction(signed_transaction.rawTransaction)
+        return transaction_hash.hex()
 
     def sign_b64(self, data: bytes) -> str:
         raw_signature = bytes(self._sk.sign(data, sigencode=sigencode_string_canonize))
